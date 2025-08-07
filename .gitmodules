@@ -1,0 +1,3 @@
+[submodule "MQTTClient/external/paho.mqtt.c"]
+	path = MQTTClient/external/paho.mqtt.c
+	url = https://github.com/eclipse/paho.mqtt.c.git
