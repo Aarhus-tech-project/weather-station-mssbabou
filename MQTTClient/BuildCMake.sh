@@ -1,4 +1,4 @@
 rm -rf build/
 mkdir build/
 cd build/
-cmake ..
+cmake .. -DCMAKE_PREFIX_PATH=/opt/homebrew/opt/libpq
