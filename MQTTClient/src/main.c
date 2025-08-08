@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <MQTTClient.h>
 #include <libpq-fe.h>
@@ -16,9 +17,25 @@
 #define MQTT_QOS 1
 #define MQTT_TIMEOUT 10000L
 
+char *copy_with_null(const char *src, int len) {
+    char *dest = malloc(len + 1);
+    if (!dest) return NULL;
+    memcpy(dest, src, len);
+    dest[len] = '\0';
+    return dest;
+}
+
 int messageArrivedCallback(void *context, char *topicName, int topicLen, MQTTClient_message *message) {
     printf("Message arrived on topic: %s\n", topicName);
     printf("Message: %.*s\n", message->payloadlen, (char*)message->payload);
+
+    WeatherData data;
+    int jsonR = wd_try_parse_weather_data(&data, copy_with_null((char*)message->payload, message->payloadlen));
+    if (jsonR == 0)
+    {
+        int dbR = wdb_insert(&data);
+    }
+
     MQTTClient_freeMessage(&message);
     MQTTClient_free(topicName);
 
@@ -29,20 +46,6 @@ int main()
 {
     db_init();
 
-    WeatherData data;
-    const char *json = "{\"device_id\":\"WeatherSt111ation\",\"temp\":24.73,\"hum\":52.11,\"pres\":100759.59,\"eco2\":478,\"tvoc\":11}";
-    int jsonR = wd_try_parse_weather_data(&data, json);
-
-    if (jsonR > 0) return 1;
-
-    int dbR = wdb_insert(&data);
-
-    if (dbR > 0) return 1;
-
-    db_close();
-    return 0;
-
-    /*
     MQTTClient client;
     MQTTClient_connectOptions conn_opts = MQTTClient_connectOptions_initializer;
     int rc;
@@ -73,10 +76,7 @@ int main()
 
     MQTTClient_disconnect(client, MQTT_TIMEOUT);
     MQTTClient_destroy(&client);
-    return rc;
-    */
 
-
-    /*
-    */
+    db_close();
+    return 0;
 }
