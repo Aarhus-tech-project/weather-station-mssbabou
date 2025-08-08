@@ -4,7 +4,8 @@
 #include <MQTTClient.h>
 #include <libpq-fe.h>
 
-#include "weatherData.h"
+#include "weatherdb.h"
+#include "weatherdata.h"
 #include "db.h"
 
 #define MQTT_BROKER_ADDRESS "tcp://192.168.108.11"
@@ -28,24 +29,15 @@ int main()
 {
     db_init();
 
-    WeatherData wData;
+    WeatherData data;
     const char *json = "{\"device_id\":\"WeatherSt111ation\",\"temp\":24.73,\"hum\":52.11,\"pres\":100759.59,\"eco2\":478,\"tvoc\":11}";
-    int r = wd_try_parse_weather_data(&wData, json);
+    int jsonR = wd_try_parse_weather_data(&data, json);
 
-    if (r > 0) return 1;
+    if (jsonR > 0) return 1;
 
-    char sql[1024];
-    snprintf(sql, sizeof(sql),
-            "INSERT INTO weatherdata "
-            "(device_id, timestamp, temperature, humidity, pressure, eco2, tvoc) "
-            "VALUES ('%s', '%s', %.2f, %.2f, %.2f, %d, %d)",
-            wData.device_id, wData.timestamp,
-            wData.temperature, wData.humidity, wData.pressure,
-            wData.eco2, wData.tvoc);
+    int dbR = wdb_insert(&data);
 
-    int i = db_exec(sql);
-
-    printf("%d\n", i);
+    if (dbR > 0) return 1;
 
     db_close();
     return 0;

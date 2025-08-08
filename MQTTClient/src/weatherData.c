@@ -1,4 +1,4 @@
-#include "weatherData.h"
+#include "weatherdata.h"
 #include "jsmn.h"
 #include <string.h>
 #include <time.h>
