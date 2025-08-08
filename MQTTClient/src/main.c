@@ -1,8 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
+
 #include <MQTTClient.h>
-#include <jsmn.h>
 #include <libpq-fe.h>
+
+#include "weatherData.h"
+#include "db.h"
 
 #define MQTT_BROKER_ADDRESS "tcp://192.168.108.11"
 #define MQTT_CLIENTID "WeatherSubClient"
@@ -23,6 +26,31 @@ int messageArrivedCallback(void *context, char *topicName, int topicLen, MQTTCli
 
 int main()
 {
+    db_init();
+
+    WeatherData wData;
+    const char *json = "{\"device_id\":\"WeatherSt111ation\",\"temp\":24.73,\"hum\":52.11,\"pres\":100759.59,\"eco2\":478,\"tvoc\":11}";
+    int r = wd_try_parse_weather_data(&wData, json);
+
+    if (r > 0) return 1;
+
+    char sql[1024];
+    snprintf(sql, sizeof(sql),
+            "INSERT INTO weatherdata "
+            "(device_id, timestamp, temperature, humidity, pressure, eco2, tvoc) "
+            "VALUES ('%s', '%s', %.2f, %.2f, %.2f, %d, %d)",
+            wData.device_id, wData.timestamp,
+            wData.temperature, wData.humidity, wData.pressure,
+            wData.eco2, wData.tvoc);
+
+    int i = db_exec(sql);
+
+    printf("%d\n", i);
+
+    db_close();
+    return 0;
+
+    /*
     MQTTClient client;
     MQTTClient_connectOptions conn_opts = MQTTClient_connectOptions_initializer;
     int rc;
@@ -54,20 +82,9 @@ int main()
     MQTTClient_disconnect(client, MQTT_TIMEOUT);
     MQTTClient_destroy(&client);
     return rc;
+    */
+
 
     /*
-    const char *dbconninfo = "host=192.168.108.11 port=5432 dbname=postgres user=markus password=Datait2025!";
-    PGconn *dbconn = PQconnectdb(dbconninfo);
-
-    if (PQstatus(dbconn) != CONNECTION_OK) {
-        fprintf(stderr, "Connection failed: %s\n", PQerrorMessage(dbconn));
-        PQfinish(dbconn);
-        return 1;
-    }
-
-    printf("Connected to PostgreSQL server!\n");
-
-    PQfinish(dbconn);
-    return 0;
     */
 }
