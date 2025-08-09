@@ -1,7 +1,15 @@
+# Build folders (case-insensitive)
 [Bb]uild/
 
-ArduinoFirmware/.pio
-ArduinoFirmware/.vscode/.browse.c_cpp.db*
-ArduinoFirmware/.vscode/c_cpp_properties.json
-ArduinoFirmware/.vscode/launch.json
-ArduinoFirmware/.vscode/ipch
+# Ignore all VS Code config folders anywhere in the repo
+.vscode/
+
+# PlatformIO build cache anywhere
+.pio/
+
+# If you want to keep some .vscode files (rare) but ignore the rest:
+# !.vscode/extensions.json
+
+# Ignore specific VS Code database/cache files just in case
+.vscode/.browse.c_cpp.db*
+.vscode/ipch/
