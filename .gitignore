@@ -4,6 +4,10 @@
 # Ignore all VS Code config folders anywhere in the repo
 .vscode/
 
+# Ignore all Zed editor files
+.zed/
+.cache/
+
 # PlatformIO build cache anywhere
 .pio/
 
