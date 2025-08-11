@@ -2,7 +2,7 @@
 #include "db.h"
 #include <stdio.h>
 
-int wdb_insert(const WeatherData *data) {
+int wdb_insert(const weather_data_t *data) {
     const char *params[7];
     char temp_str[32], hum_str[32], pres_str[32], eco2_str[16], tvoc_str[16];
 

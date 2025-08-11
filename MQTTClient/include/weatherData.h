@@ -16,8 +16,8 @@ typedef struct {
     float pressure;
     int   eco2;
     int   tvoc;
-} WeatherData;
+} weather_data_t;
 
-int wd_try_parse_weather_data(WeatherData *out, const char *json);
+int wd_parse_weather_array_strict(weather_data_t *out, size_t max_items, const char *json, size_t *needed_out);
 
 void wd_fill_timestamp(char ts[WD_TIMESTAMP_LEN], bool utc);

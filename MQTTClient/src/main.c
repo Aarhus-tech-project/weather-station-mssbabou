@@ -1,6 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
+#include <unistd.h>
+#include <stdatomic.h>
 
 #include <MQTTClient.h>
 #include <libpq-fe.h>
@@ -25,17 +28,25 @@ char *copy_with_null(const char *src, int len) {
     return dest;
 }
 
+static volatile sig_atomic_t running = 1;
+static void on_sigint(int) { running = 0; }
+
 int messageArrivedCallback(void *context, char *topicName, int topicLen, MQTTClient_message *message) {
     printf("Message arrived on topic: %s\n", topicName);
     printf("Message: %.*s\n", message->payloadlen, (char*)message->payload);
 
-    WeatherData data;
-    int jsonR = wd_try_parse_weather_data(&data, copy_with_null((char*)message->payload, message->payloadlen));
-    if (jsonR == 0)
-    {
-        int dbR = wdb_insert(&data);
+    weather_data_t *arr = malloc(256 * sizeof(weather_data_t));
+    char *json_payload = copy_with_null((char*)message->payload, message->payloadlen);
+    int jsonR = wd_parse_weather_array_strict(arr, 256, json_payload, NULL);
+    if (jsonR > 0)
+    {   
+        for (size_t i = 0; i < jsonR; i++)
+        {
+            int dbR = wdb_insert(&arr[i]);
+        }
     }
 
+    free(arr);
     MQTTClient_freeMessage(&message);
     MQTTClient_free(topicName);
 
@@ -69,9 +80,11 @@ int main()
 
     printf("Subscribed to topic \"%s\" — waiting for messages...\n", MQTT_TOPIC);
 
-    // Keep running
-    for(;;) {
-        // This loop just waits for messages
+    signal(SIGINT, on_sigint);
+    signal(SIGTERM, on_sigint);
+    
+    while(running) {
+        sleep(1); // Keep the program running to receive messages
     }
 
     MQTTClient_disconnect(client, MQTT_TIMEOUT);
