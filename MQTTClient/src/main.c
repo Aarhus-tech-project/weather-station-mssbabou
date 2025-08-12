@@ -10,23 +10,16 @@
 
 #include "weatherdb.h"
 #include "weatherdata.h"
+#include "utils.h"
 #include "db.h"
 
-#define MQTT_BROKER_ADDRESS "tcp://192.168.108.11"
+#define MQTT_BROKER_ADDRESS "tcp://127.0.0.1"
 #define MQTT_CLIENTID "WeatherSubClient"
 #define MQTT_USERNAME "weather"
 #define MQTT_PASSWORD "Datait2025!"
 #define MQTT_TOPIC "sensor/weather"
 #define MQTT_QOS 1
 #define MQTT_TIMEOUT 10000L
-
-char *copy_with_null(const char *src, int len) {
-    char *dest = malloc(len + 1);
-    if (!dest) return NULL;
-    memcpy(dest, src, len);
-    dest[len] = '\0';
-    return dest;
-}
 
 static volatile sig_atomic_t running = 1;
 static void on_sigint(int) { running = 0; }
@@ -47,6 +40,7 @@ int messageArrivedCallback(void *context, char *topicName, int topicLen, MQTTCli
     }
 
     free(arr);
+    free(json_payload);
     MQTTClient_freeMessage(&message);
     MQTTClient_free(topicName);
 
@@ -55,7 +49,7 @@ int messageArrivedCallback(void *context, char *topicName, int topicLen, MQTTCli
 
 int main()
 {
-    db_init();
+    db_init(DB_CONNECTION_STRING);
 
     MQTTClient client;
     MQTTClient_connectOptions conn_opts = MQTTClient_connectOptions_initializer;

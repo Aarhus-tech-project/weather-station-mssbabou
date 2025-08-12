@@ -11,7 +11,6 @@
 
 #define NTP_SERVER "192.168.108.11"  // your LAN NTP
 
-// ====== WIFI / MQTT CONFIG ======
 const char* ssid = "h4prog";
 const char* password = "1234567890";
 
@@ -23,13 +22,11 @@ const char* mqtt_user   = "weather";
 const char* mqtt_pass   = "Datait2025!";
 const char* mqtt_topic  = "sensor/weather";
 
-// ====== INIT ======
 WiFiClient espClient;
 PubSubClient client(espClient);
 BME280I2C bme;
 Adafruit_CCS811 ccs811;
 
-// ====== NTP (UTC) ======
 WiFiUDP ntpUDP;
 NTPClient ntp(ntpUDP, NTP_SERVER, 0 /*UTC offset*/, 60 * 1000 /*update every 60s*/);
 
@@ -106,7 +103,6 @@ static void maybeRefreshTimebase() {
   }
 }
 
-// ====== CONNECT WIFI (robust) ======
 void connectWiFi() {
   if (WiFi.status() == WL_CONNECTED) return;
 
@@ -131,7 +127,6 @@ void connectWiFi() {
   ensureNTP();
 }
 
-// ====== CONNECT MQTT (robust) ======
 void connectMQTT() {
   if (client.connected()) return;
 
@@ -150,7 +145,6 @@ void connectMQTT() {
   }
 }
 
-// ====== SEND SENSOR DATA ======
 void sendMQTT(float temp, float hum, float pres, uint16_t eco2, uint16_t tvoc) {
   // keep timebase fresh; non-blocking most of the time
   maybeRefreshTimebase();
@@ -170,7 +164,6 @@ void sendMQTT(float temp, float hum, float pres, uint16_t eco2, uint16_t tvoc) {
   }
 }
 
-// ====== SETUP ======
 void setup() {
   Serial.begin(SERIAL_BAUD);
   Wire.begin();
@@ -209,7 +202,6 @@ void setup() {
   delay(10000);
 }
 
-// ====== MAIN SENSOR LOOP ======
 void loop() {
   if (WiFi.status() != WL_CONNECTED) connectWiFi();
   if (!client.connected())         connectMQTT();

@@ -1,5 +1,6 @@
 # Build folders (case-insensitive)
 [Bb]uild/
+[Bb]uild-amd64/
 
 # Ignore all VS Code config folders anywhere in the repo
 .vscode/

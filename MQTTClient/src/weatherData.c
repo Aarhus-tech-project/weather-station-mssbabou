@@ -15,12 +15,12 @@ void wd_fill_timestamp(char ts[WD_TIMESTAMP_LEN], bool utc) {
         gmtime_r(&tv.tv_sec, &tmv);
         strftime(ts, WD_TIMESTAMP_LEN, "%Y-%m-%dT%H:%M:%S", &tmv);
         snprintf(ts + strlen(ts), WD_TIMESTAMP_LEN - strlen(ts),
-                 ".%03ldZ", tv.tv_usec / 1000);
+                 ".%03ldZ", tv.tv_usec / 1000L);
     } else {
         localtime_r(&tv.tv_sec, &tmv);
         strftime(ts, WD_TIMESTAMP_LEN, "%Y-%m-%d %H:%M:%S", &tmv);
         snprintf(ts + strlen(ts), WD_TIMESTAMP_LEN - strlen(ts),
-                 ".%03ld%z", tv.tv_usec / 1000);
+                 ".%03ld%z", tv.tv_usec / 1000L);
     }
 }
 
