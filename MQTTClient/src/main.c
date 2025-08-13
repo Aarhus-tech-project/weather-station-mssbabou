@@ -13,6 +13,8 @@
 #include "utils.h"
 #include "db.h"
 
+#define DB_CONNECTION_STRING "host=127.0.0.1 port=5432 dbname=Weather user=markus password=Datait2025!"
+
 #define MQTT_BROKER_ADDRESS "tcp://127.0.0.1"
 #define MQTT_CLIENTID "WeatherSubClient"
 #define MQTT_USERNAME "weather"
@@ -49,7 +51,8 @@ int messageArrivedCallback(void *context, char *topicName, int topicLen, MQTTCli
 
 int main()
 {
-    db_init(DB_CONNECTION_STRING);
+    char *db_conninfo = DB_CONNECTION_STRING;
+    db_init(db_conninfo);
 
     MQTTClient client;
     MQTTClient_connectOptions conn_opts = MQTTClient_connectOptions_initializer;

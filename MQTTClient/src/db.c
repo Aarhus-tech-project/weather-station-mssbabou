@@ -4,9 +4,9 @@
 
 static PGconn *db_conn = NULL;
 
-void db_init()
+void db_init(const char* conninfo)
 {
-    db_conn = PQconnectdb(DB_CONNECTION_STRING);
+    db_conn = PQconnectdb(conninfo);
     if (PQstatus(db_conn) != CONNECTION_OK) {
         fprintf(stderr, "Database Connection failed: %s\n", PQerrorMessage(db_conn));
         PQfinish(db_conn);
