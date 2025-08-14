@@ -57,7 +57,7 @@ export async function POST(req) {
     }
   };
 
-  const upstream = await fetch("http://192.168.108.11:11434/api/chat", {
+  const upstream = await fetch("http://localhost:11434/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
