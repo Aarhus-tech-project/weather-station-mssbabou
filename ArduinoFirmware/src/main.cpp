@@ -3,19 +3,22 @@
 #include <WiFiUdp.h>
 #include <NTPClient.h>
 #include <PubSubClient.h>
-#include <BME280I2C.h>
+#include <Adafruit_BME280.h>
 #include <Adafruit_CCS811.h>
 #include <time.h>
 
 #define SERIAL_BAUD 9600
+#define NTP_SERVER "192.168.108.11"
 
-#define NTP_SERVER "192.168.108.11"  // your LAN NTP
+// ---- I2C / Qwiic ----
+TwoWire& I2C = Wire1;            // Qwiic on UNO R4 WiFi (IIC0)
+constexpr uint8_t BME_ADDR = 0x77;
+constexpr uint8_t CCS_ADDR = 0x5A;
 
+// ---- WiFi / MQTT ----
 const char* ssid = "h4prog";
 const char* password = "1234567890";
-
 const char* device_id = "WeatherStation";
-
 const char* mqtt_server = "192.168.108.11";
 const int   mqtt_port   = 1883;
 const char* mqtt_user   = "weather";
@@ -24,141 +27,121 @@ const char* mqtt_topic  = "sensor/weather";
 
 WiFiClient espClient;
 PubSubClient client(espClient);
-BME280I2C bme;
+
+// ---- Sensors ----
+Adafruit_BME280 bme280;
 Adafruit_CCS811 ccs811;
 
+// ---- NTP (ms-capable timebase) ----
 WiFiUDP ntpUDP;
-NTPClient ntp(ntpUDP, NTP_SERVER, 0 /*UTC offset*/, 60 * 1000 /*update every 60s*/);
+NTPClient ntp(ntpUDP, NTP_SERVER, 0, 60 * 1000);
 
-// ---- ms-capable timebase (NTP seconds + millis() delta) ----
-static uint32_t tb_epoch_sec = 0;   // last NTP epoch seconds
-static uint32_t tb_millis    = 0;   // millis() captured at that moment
+static uint32_t tb_epoch_sec = 0;
+static uint32_t tb_millis    = 0;
 static bool     tb_valid     = false;
-static unsigned long last_refresh_ms = 0; // our own periodic refresh guard
+static unsigned long last_refresh_ms = 0;
 
-// Build ISO 8601 UTC with milliseconds: 2025-08-11T10:50:21.189Z
+static unsigned long next_wifi_attempt_ms = 0;
+static unsigned long next_mqtt_attempt_ms = 0;
+static bool wifi_was_connected = false;
+
 static void makeTimestampUTCms(char out[48]) {
-  if (!tb_valid) {
-    snprintf(out, 48, "unsynced-%lu", (unsigned long)millis());
-    return;
-  }
-  uint32_t now_ms   = millis();
-  uint32_t delta_ms = now_ms - tb_millis;          // unsigned handles rollover
-  uint32_t sec      = tb_epoch_sec + (delta_ms / 1000);
-  uint16_t msec     = delta_ms % 1000;
-
+  if (!tb_valid) { snprintf(out, 48, "unsynced-%lu", (unsigned long)millis()); return; }
+  uint32_t delta_ms = millis() - tb_millis;
+  uint32_t sec  = tb_epoch_sec + (delta_ms / 1000);
+  uint16_t msec = delta_ms % 1000;
   time_t t = (time_t)sec;
-  struct tm *tmv = gmtime(&t); // UTC
-  if (!tmv) {
-    snprintf(out, 48, "unsynced-%lu", (unsigned long)millis());
-    return;
-  }
-
+  struct tm *tmv = gmtime(&t);
+  if (!tmv) { snprintf(out, 48, "unsynced-%lu", (unsigned long)millis()); return; }
   char base[32];
   strftime(base, sizeof(base), "%Y-%m-%dT%H:%M:%S", tmv);
   snprintf(out, 48, "%s.%03uZ", base, msec);
 }
-
-static bool ntpReady() {
-  return ntp.getEpochTime() > 1700000000UL; // ~2023-11 sanity floor
-}
-
+static bool ntpReady() { return ntp.getEpochTime() > 1700000000UL; }
 static void resetTimebaseFromNTP() {
   if (ntpReady()) {
     tb_epoch_sec = (uint32_t)ntp.getEpochTime();
     tb_millis    = millis();
     tb_valid     = true;
-
-    // --- SERIAL INDICATOR ---
-    char ts[48];
-    makeTimestampUTCms(ts);
-    Serial.print("[NTP] Time updated from server: ");
-    Serial.println(ts);
+    char ts[48]; makeTimestampUTCms(ts);
+    Serial.print("[NTP] Time updated: "); Serial.println(ts);
   }
 }
-
-// Try a bounded wait during setup/first use
 static void ensureNTP() {
   if (ntp.update()) { resetTimebaseFromNTP(); return; }
-  unsigned long deadline = millis() + 5000; // up to 5s
-  while (!ntp.update() && millis() < deadline) {
-    delay(200);
-  }
+  unsigned long deadline = millis() + 5000;
+  while (!ntp.update() && millis() < deadline) delay(200);
   resetTimebaseFromNTP();
 }
-
-// call this often (in loop) to keep time fresh
 static void maybeRefreshTimebase() {
-  // normal non-blocking update attempt
-  if (ntp.update()) {
-    resetTimebaseFromNTP();
-  }
-
-  // extra guard: every ~5 minutes, attempt another refresh
+  if (ntp.update()) resetTimebaseFromNTP();
   const unsigned long now = millis();
-  if (now - last_refresh_ms >= 300000UL) { // 5 min
-    ntp.update();               // try again (non-blocking)
-    resetTimebaseFromNTP();     // capture if new time arrived
-    last_refresh_ms = now;
-  }
+  if (now - last_refresh_ms >= 300000UL) { ntp.update(); resetTimebaseFromNTP(); last_refresh_ms = now; }
 }
 
-void connectWiFi() {
-  if (WiFi.status() == WL_CONNECTED) return;
+// ---- WiFi / MQTT helpers ----
+bool ensureWiFi() {
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!wifi_was_connected) {        // just reconnected
+      ntp.begin();                     // re-arm NTP socket
+      ensureNTP();                     // refresh baseline
+      wifi_was_connected = true;
+    }
+    return true;
+  }
+  wifi_was_connected = false;
 
+  // retry at most every few seconds (exponential-ish backoff)
+  if (millis() < next_wifi_attempt_ms) return false;
+  static uint8_t attempt = 0;
+
+  WiFi.end(); delay(50);
   WiFi.begin(ssid, password);
-  Serial.print("Connecting to WiFi");
-  uint8_t kicks = 0;
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-    // every ~10s, kick the radio to avoid stale states
-    if (++kicks % 20 == 0) {
-      Serial.print(" (rebegin) ");
-      WiFi.end();
-      delay(100);
-      WiFi.begin(ssid, password);
-    }
-  }
-  Serial.println(" Connected!");
 
-  // when Wi-Fi comes back, refresh NTP baseline
-  ntp.begin();
-  ensureNTP();
+  unsigned long wait = 2000UL << (attempt < 6 ? attempt : 6); // 2s .. 128s
+  next_wifi_attempt_ms = millis() + wait;
+  if (attempt < 10) attempt++;
+  Serial.println("[WiFi] reconnect attempt");
+  return false;
 }
+bool ensureMQTT() {
+  if (!ensureWiFi()) return false;
+  if (client.connected()) return true;
 
-void connectMQTT() {
-  if (client.connected()) return;
+  if (millis() < next_mqtt_attempt_ms) return false;
 
-  uint8_t tries = 0;
-  while (!client.connected() && tries < 5) {
-    Serial.print("Connecting to MQTT...");
-    if (client.connect("ArduinoWeather", mqtt_user, mqtt_pass)) {
-      Serial.println(" connected!");
-    } else {
-      Serial.print(" failed, rc=");
-      Serial.print(client.state());
-      Serial.println(" retry in 2s");
-      delay(2000);
-      tries++;
-    }
-  }
-}
+  // unique client id avoids broker kicking previous session
+  byte mac[6]; WiFi.macAddress(mac);
+  char cid[40];
+  snprintf(cid, sizeof(cid), "ArduinoWeather-%02X%02X%02X", mac[3], mac[4], mac[5]);
 
-void sendMQTT(float temp, float hum, float pres, uint16_t eco2, uint16_t tvoc) {
-  // keep timebase fresh; non-blocking most of the time
-  maybeRefreshTimebase();
-
-  char ts[48];
-  makeTimestampUTCms(ts);
-
-  char payload[512];
-  snprintf(payload, sizeof(payload),
-    "[{\"device_id\":\"%s\",\"temp\":%.2f,\"hum\":%.2f,\"pres\":%.2f,"
-    "\"eco2\":%u,\"tvoc\":%u,\"timestamp\":\"%s\"}]",
-    device_id, temp, hum, pres, eco2, tvoc, ts
+  // optional: LWT so you know if device drops
+  bool ok = client.connect(
+    cid, mqtt_user, mqtt_pass,
+    "sensor/weather/status", 1, true, "offline"
   );
 
+  if (ok) {
+    client.publish("sensor/weather/status", "online", true);
+    next_mqtt_attempt_ms = millis() + 10000; // next health check
+    Serial.println("[MQTT] connected");
+    return true;
+  } else {
+    Serial.print("[MQTT] failed rc="); Serial.println(client.state());
+    next_mqtt_attempt_ms = millis() + 5000;
+    return false;
+  }
+}
+
+void sendMQTT(float tempC, float humRH, float pres_hPa, uint16_t eco2, uint16_t tvoc) {
+  maybeRefreshTimebase();
+  char ts[48]; makeTimestampUTCms(ts);
+  char payload[512];
+  snprintf(payload, sizeof(payload),
+    "[{\"device_id\":\"%s\",\"temp\":%.2f,\"hum\":%.2f,\"pres_hPa\":%.2f,"
+    "\"eco2\":%u,\"tvoc\":%u,\"timestamp\":\"%s\"}]",
+    device_id, tempC, humRH, pres_hPa, eco2, tvoc, ts
+  );
   if (!client.publish(mqtt_topic, payload)) {
     Serial.println("MQTT publish failed (will retry after reconnect).");
   }
@@ -166,36 +149,28 @@ void sendMQTT(float temp, float hum, float pres, uint16_t eco2, uint16_t tvoc) {
 
 void setup() {
   Serial.begin(SERIAL_BAUD);
-  Wire.begin();
+  // ---- I2C on Qwiic ----
+  I2C.begin();
+  I2C.setClock(100000);  // start conservative for daisy chains; try 400k later
 
-  connectWiFi();                 // Wi-Fi up first
-  ntp.begin();                   // start NTP client
-  ensureNTP();                   // try to sync once (bounded)
+  ensureWiFi();
+  ntp.begin();
+  ensureNTP();
 
   client.setServer(mqtt_server, mqtt_port);
   client.setKeepAlive(30);
   client.setSocketTimeout(10);
   client.setBufferSize(1024);
 
-  while (!bme.begin()) {
-    Serial.println("Could not find BME280 sensor!");
-    delay(1000);
+  // ---- Sensors on Wire1 with explicit addresses ----
+  if (!bme280.begin(BME_ADDR, &I2C)) {
+    Serial.println("Could not find BME280 on Wire1 @ 0x77!");
+    while (1) delay(100);
   }
 
-  switch (bme.chipModel()) {
-    case BME280::ChipModel_BME280:
-      Serial.println("Found BME280 sensor! Success.");
-      break;
-    case BME280::ChipModel_BMP280:
-      Serial.println("Found BMP280 sensor! No Humidity available.");
-      break;
-    default:
-      Serial.println("Found UNKNOWN sensor! Error!");
-  }
-
-  if (!ccs811.begin()) {
-    Serial.println("CCS811 not found. Check wiring.");
-    while (1) { delay(100); }
+  if (!ccs811.begin(CCS_ADDR, &I2C)) {      // pass addr + bus
+    Serial.println("CCS811 not found on Wire1 @ 0x5A. Check wiring.");
+    while (1) delay(100);
   }
 
   Serial.println("CCS811 warming up...");
@@ -203,20 +178,20 @@ void setup() {
 }
 
 void loop() {
-  if (WiFi.status() != WL_CONNECTED) connectWiFi();
-  if (!client.connected())         connectMQTT();
+  ensureWiFi();
+  ensureMQTT();
   client.loop();
 
-  // keep timebase fresh even if no publishes happen for a while
   maybeRefreshTimebase();
 
-  float temp(NAN), hum(NAN), pres(NAN);
-  BME280::TempUnit tempUnit = BME280::TempUnit_Celsius;
-  BME280::PresUnit presUnit = BME280::PresUnit_Pa;
+  // ---- Read sensors ----
+  float tempC = bme280.readTemperature();   // °C
+  float humRH = bme280.readHumidity();      // %RH
+  // Adafruit_BME280 returns pressure in Pascals:
+  float pres_hPa = bme280.readPressure(); 
 
-  bme.read(pres, temp, hum, tempUnit, presUnit);
-  if (!isnan(temp) && !isnan(hum)) {
-    ccs811.setEnvironmentalData(hum, temp);
+  if (!isnan(tempC) && !isnan(humRH)) {
+    ccs811.setEnvironmentalData(humRH, tempC); // RH %, Temp °C
   }
 
   if (ccs811.available()) {
@@ -224,17 +199,13 @@ void loop() {
       uint16_t eco2 = ccs811.geteCO2();
       uint16_t tvoc = ccs811.getTVOC();
 
-      Serial.print("Temp: "); Serial.print(temp); Serial.print("°C\t");
-      Serial.print("Humidity: "); Serial.print(hum); Serial.print("% RH\t");
-      Serial.print("Pressure: "); Serial.print(pres); Serial.print(" Pa\t");
-      Serial.print("CO2: "); Serial.print(eco2); Serial.print(" ppm\t");
-      Serial.print("TVOC: "); Serial.print(tvoc); Serial.print(" ppb\t");
+      Serial.print("T: "); Serial.print(tempC,2); Serial.print(" °C\t");
+      Serial.print("RH: "); Serial.print(humRH,2); Serial.print(" %\t");
+      Serial.print("P: "); Serial.print(pres_hPa,2); Serial.print(" Pa\t");
+      Serial.print("eCO2: "); Serial.print(eco2); Serial.print(" ppm\t");
+      Serial.print("TVOC: "); Serial.print(tvoc); Serial.println(" ppb");
 
-      char timestamp[48];
-      makeTimestampUTCms(timestamp);
-      Serial.print("Timestamp: ");  Serial.println(timestamp);
-
-      sendMQTT(temp, hum, pres, eco2, tvoc);
+      sendMQTT(tempC, humRH, pres_hPa, eco2, tvoc);
     } else {
       Serial.println("CCS811 ERROR: Failed to read data.");
     }
